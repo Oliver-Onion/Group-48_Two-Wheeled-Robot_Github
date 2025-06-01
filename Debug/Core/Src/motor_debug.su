@@ -1,0 +1,5 @@
+../Core/Src/motor_debug.c:21:6:Motor_Debug_PWMTest	296	static
+../Core/Src/motor_debug.c:83:6:Motor_Debug_DirectionTest	112	static
+../Core/Src/motor_debug.c:132:6:Motor_Debug_SpeedFunctionTest	200	static
+../Core/Src/motor_debug.c:170:6:Motor_Debug_DiagnoseProblem	208	static
+../Core/Src/motor_debug.c:232:6:Motor_Debug_ShowPWMValue	144	static

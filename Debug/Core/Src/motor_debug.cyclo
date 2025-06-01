@@ -1,0 +1,5 @@
+../Core/Src/motor_debug.c:21:6:Motor_Debug_PWMTest	2
+../Core/Src/motor_debug.c:83:6:Motor_Debug_DirectionTest	1
+../Core/Src/motor_debug.c:132:6:Motor_Debug_SpeedFunctionTest	2
+../Core/Src/motor_debug.c:170:6:Motor_Debug_DiagnoseProblem	5
+../Core/Src/motor_debug.c:232:6:Motor_Debug_ShowPWMValue	3
