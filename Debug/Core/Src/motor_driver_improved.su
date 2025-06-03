@@ -1,9 +1,0 @@
-../Core/Src/motor_driver_improved.c:33:17:Motor_ImprovedSpeedToPWM	32	static
-../Core/Src/motor_driver_improved.c:63:17:Motor_NonlinearSpeedToPWM	40	static
-../Core/Src/motor_driver_improved.c:89:6:Motor_CalibrateDeadZone	120	static
-../Core/Src/motor_driver_improved.c:133:6:Motor_SetCalibrationParams	184	static
-../Core/Src/motor_driver_improved.c:151:6:Motor_SetSpeedImproved	24	static
-../Core/Src/motor_driver_improved.c:214:6:Motor_ForwardImproved	16	static
-../Core/Src/motor_driver_improved.c:226:6:Motor_FineSpeedTest	168	static
-../Core/Src/motor_driver_improved.c:263:6:Motor_DiagnosePWMFrequency	176	static
-../Core/Src/motor_driver_improved.c:299:7:sqrtf	24	static

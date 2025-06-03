@@ -5,23 +5,19 @@
   ******************************************************************************
   * @attention
   *
-  * Motor driver for two-wheeled robot using MC520 driver module
+  * Motor driver for two-wheeled robot using AT8236 driver module
   * Hardware Configuration:
-  * - Left Motor (Motor A):  AIN1 (PB14), AIN2 (PB15), PWM on TIM4_CH3 (PB8)
-  * - Right Motor (Motor B): BIN1 (PB13), BIN2 (PB12), PWM on TIM4_CH4 (PB9)
+  * - Left Motor (Motor A):  PWMA1 (TIM4_CH3-PB8), PWMA2 (TIM4_CH4-PB9)
+  * - Right Motor (Motor B): PWMB1 (TIM4_CH1-PB6), PWMB2 (TIM4_CH2-PB7)
   * - Left Encoder: TIM2 (PA0-Encoder_A1, PA1-Encoder_A2)
   * - Right Encoder: TIM3 (PC6-Encoder_B1, PB5-Encoder_B2)
   * 
-  * MC520 Control Logic:
-  * Left Motor:
-  *   Forward:  AIN1=1, AIN2=0, PWM=duty
-  *   Backward: AIN1=0, AIN2=1, PWM=duty
-  * Right Motor:
-  *   Forward:  BIN1=0, BIN2=1, PWM=duty
-  *   Backward: BIN1=1, BIN2=0, PWM=duty
-  * Both Motors:
-  *   Brake:    xIN1=1, xIN2=1
-  *   Stop:     xIN1=0, xIN2=0
+  * AT8236 Control Logic:
+  * Motor speed and direction controlled by PWM differential:
+  * - Forward:  PWM_IN1 > PWM_IN2
+  * - Backward: PWM_IN1 < PWM_IN2
+  * - Stop:     PWM_IN1 = PWM_IN2
+  * - Speed determined by |PWM_IN1 - PWM_IN2|
   *
   ******************************************************************************
   */
@@ -31,6 +27,10 @@
 
 /* Private typedef -----------------------------------------------------------*/
 /* Private define ------------------------------------------------------------*/
+#define PWM_PERIOD_VALUE    8399    // PWM period value (matches TIM4 Period setting)
+#define PWM_CENTER_VALUE    4200    // Center PWM value (50% duty cycle)
+#define PWM_MAX_DIFF        4200    // Maximum PWM difference for full speed
+
 /* Private macro -------------------------------------------------------------*/
 /* Private variables ---------------------------------------------------------*/
 extern TIM_HandleTypeDef htim2;  // Left encoder timer handle
@@ -42,8 +42,8 @@ static EncoderData_t encoder_data = {0};
 static uint32_t last_encoder_update_time = 0;
 
 /* Private function prototypes -----------------------------------------------*/
-static void Motor_SetDirection(MotorSelector_t motor, MotorDirection_t direction);
-static uint32_t Motor_SpeedToPWM(int16_t speed);
+static void Motor_SetPWM(MotorSelector_t motor, int16_t speed);
+static uint32_t Motor_SpeedToPWMDiff(int16_t speed);
 
 /* Private user code ---------------------------------------------------------*/
 
@@ -54,9 +54,11 @@ static uint32_t Motor_SpeedToPWM(int16_t speed);
   */
 void Motor_Init(void)
 {
-    // Start PWM generation on TIM4 channels
-    HAL_TIM_PWM_Start(&htim4, MOTOR_LEFT_PWM_CHANNEL);
-    HAL_TIM_PWM_Start(&htim4, MOTOR_RIGHT_PWM_CHANNEL);
+    // Start PWM generation on all TIM4 channels
+    HAL_TIM_PWM_Start(&htim4, TIM_CHANNEL_1);  // PWMB1
+    HAL_TIM_PWM_Start(&htim4, TIM_CHANNEL_2);  // PWMB2
+    HAL_TIM_PWM_Start(&htim4, TIM_CHANNEL_3);  // PWMA1
+    HAL_TIM_PWM_Start(&htim4, TIM_CHANNEL_4);  // PWMA2
     
     // Initialize motors to stop state
     Motor_Stop();
@@ -124,12 +126,13 @@ void Encoder_Update(void)
     if (current_time - last_encoder_update_time >= SPEED_CALC_PERIOD_MS) {
         float time_diff = (current_time - last_encoder_update_time) / 1000.0f; // Convert to seconds
         
-        // Calculate speed in RPM
+        // Calculate speed in counts per second, then convert to RPM
         int32_t left_diff = encoder_data.left_encoder - encoder_data.left_encoder_prev;
         int32_t right_diff = encoder_data.right_encoder - encoder_data.right_encoder_prev;
         
-        encoder_data.left_speed_rpm = (left_diff / (float)ENCODER_CPR) * (60.0f / time_diff);
-        encoder_data.right_speed_rpm = (right_diff / (float)ENCODER_CPR) * (60.0f / time_diff);
+        // Convert to encoder counts per second, then to RPM
+        encoder_data.left_speed_rpm = (left_diff / time_diff) / (float)ENCODER_CPR * 60.0f;
+        encoder_data.right_speed_rpm = (right_diff / time_diff) / (float)ENCODER_CPR * 60.0f;
         
         // Update previous values
         encoder_data.left_encoder_prev = encoder_data.left_encoder;
@@ -189,79 +192,66 @@ float Encoder_GetRightSpeed(void)
 }
 
 /**
-  * @brief  Convert speed percentage to PWM value with exponential mapping
+  * @brief  Convert speed percentage to PWM value
   * @param  speed: Speed percentage (-100 to 100)
-  * @retval PWM value (0 to PWM_MAX_VALUE)
+  * @retval PWM value (0 to PWM_PERIOD_VALUE)
   */
-static uint32_t Motor_SpeedToPWM(int16_t speed)
+static uint32_t Motor_SpeedToPWMDiff(int16_t speed)
 {
     // Get absolute value for PWM calculation
     int16_t abs_speed = (speed < 0) ? -speed : speed;
     
     // Clamp speed to valid range
-    abs_speed = CLAMP(abs_speed, 0, MOTOR_MAX_SPEED);
+    //abs_speed = CLAMP(abs_speed, 0, MOTOR_MAX_SPEED);
     
-    // Convert percentage (0-100) to PWM value (0-PWM_MAX_VALUE)
-    uint32_t pwm_value = (uint32_t)((abs_speed * PWM_MAX_VALUE) / 100);
-    
-    // Apply minimum PWM threshold for motor startup
-    if (pwm_value > 0 && pwm_value < PWM_MIN_VALUE) {
-        pwm_value = PWM_MIN_VALUE;
-    }
+    // Convert percentage (0-100) to PWM value (0-PWM_PERIOD_VALUE)
+    uint32_t pwm_value = (uint32_t)((abs_speed * PWM_PERIOD_VALUE) / 100);
     
     return pwm_value;
 }
 
 /**
-  * @brief  Set direction pins for specific motor
+  * @brief  Set PWM values for AT8236 control
   * @param  motor: Motor selector (MOTOR_LEFT or MOTOR_RIGHT)
-  * @param  direction: Motor direction
+  * @param  speed: Speed percentage (-100 to 100, negative for backward)
   * @retval None
   */
-static void Motor_SetDirection(MotorSelector_t motor, MotorDirection_t direction)
+static void Motor_SetPWM(MotorSelector_t motor, int16_t speed)
 {
+    // Clamp speed to valid range
+    //speed = CLAMP(speed, MOTOR_MIN_SPEED, MOTOR_MAX_SPEED);
+    
+    // Correct direction for right motor if physically reversed
+    if (motor == MOTOR_RIGHT) {
+        speed = -speed;  // Uncomment this line if right motor direction is physically reversed
+    }
+    
+    uint32_t pwm_value = Motor_SpeedToPWMDiff(speed);
+    uint32_t pwm_in1, pwm_in2;
+    
+    if (speed > 0) {
+        // Forward direction: IN1=PWM, IN2=0
+        pwm_in1 = pwm_value;
+        pwm_in2 = 0;
+    } else if (speed < 0) {
+        // Backward direction: IN1=0, IN2=PWM
+        pwm_in1 = 0;
+        pwm_in2 = pwm_value;
+    } else {
+        // Stop: IN1=0, IN2=0
+        pwm_in1 = 0;
+        pwm_in2 = 0;
+    }
+    
+    // Set PWM values for specified motor
     if (motor == MOTOR_LEFT) {
-        // Left motor control (AIN1=PB14, AIN2=PB15)
-        switch (direction) {
-            case MOTOR_FORWARD:
-                HAL_GPIO_WritePin(AIN1_GPIO_Port, AIN1_Pin, GPIO_PIN_SET);   // AIN1 = 1
-                HAL_GPIO_WritePin(AIN2_GPIO_Port, AIN2_Pin, GPIO_PIN_RESET); // AIN2 = 0
-                break;
-            case MOTOR_BACKWARD:
-                HAL_GPIO_WritePin(AIN1_GPIO_Port, AIN1_Pin, GPIO_PIN_RESET); // AIN1 = 0
-                HAL_GPIO_WritePin(AIN2_GPIO_Port, AIN2_Pin, GPIO_PIN_SET);   // AIN2 = 1
-                break;
-            case MOTOR_BRAKE:
-                HAL_GPIO_WritePin(AIN1_GPIO_Port, AIN1_Pin, GPIO_PIN_SET);   // AIN1 = 1
-                HAL_GPIO_WritePin(AIN2_GPIO_Port, AIN2_Pin, GPIO_PIN_SET);   // AIN2 = 1
-                break;
-            case MOTOR_STOP:
-            default:
-                HAL_GPIO_WritePin(AIN1_GPIO_Port, AIN1_Pin, GPIO_PIN_RESET); // AIN1 = 0
-                HAL_GPIO_WritePin(AIN2_GPIO_Port, AIN2_Pin, GPIO_PIN_RESET); // AIN2 = 0
-                break;
-        }
-    } else if (motor == MOTOR_RIGHT) {
-        // Right motor control (BIN1=PB13, BIN2=PB12)
-        switch (direction) {
-            case MOTOR_FORWARD:
-                HAL_GPIO_WritePin(BIN1_GPIO_Port, BIN1_Pin, GPIO_PIN_RESET); // BIN1 = 0
-                HAL_GPIO_WritePin(BIN2_GPIO_Port, BIN2_Pin, GPIO_PIN_SET);   // BIN2 = 1
-                break;
-            case MOTOR_BACKWARD:
-                HAL_GPIO_WritePin(BIN1_GPIO_Port, BIN1_Pin, GPIO_PIN_SET);   // BIN1 = 1
-                HAL_GPIO_WritePin(BIN2_GPIO_Port, BIN2_Pin, GPIO_PIN_RESET); // BIN2 = 0
-                break;
-            case MOTOR_BRAKE:
-                HAL_GPIO_WritePin(BIN1_GPIO_Port, BIN1_Pin, GPIO_PIN_SET);   // BIN1 = 1
-                HAL_GPIO_WritePin(BIN2_GPIO_Port, BIN2_Pin, GPIO_PIN_SET);   // BIN2 = 1
-                break;
-            case MOTOR_STOP:
-            default:
-                HAL_GPIO_WritePin(BIN1_GPIO_Port, BIN1_Pin, GPIO_PIN_RESET); // BIN1 = 0
-                HAL_GPIO_WritePin(BIN2_GPIO_Port, BIN2_Pin, GPIO_PIN_RESET); // BIN2 = 0
-                break;
-        }
+        // Left motor: PWMA1 (TIM4_CH3), PWMA2 (TIM4_CH4)
+        __HAL_TIM_SET_COMPARE(&htim4, TIM_CHANNEL_3, pwm_in1);
+        __HAL_TIM_SET_COMPARE(&htim4, TIM_CHANNEL_4, pwm_in2);
+    } else {
+        // Right motor: PWMB1 (TIM4_CH1), PWMB2 (TIM4_CH2)
+        __HAL_TIM_SET_COMPARE(&htim4, TIM_CHANNEL_1, pwm_in1);
+        __HAL_TIM_SET_COMPARE(&htim4, TIM_CHANNEL_2, pwm_in2);
     }
 }
 
@@ -273,9 +263,6 @@ static void Motor_SetDirection(MotorSelector_t motor, MotorDirection_t direction
   */
 void Motor_SetSpeed(MotorSelector_t motor, int16_t speed)
 {
-    // Clamp speed to valid range
-    speed = CLAMP(speed, MOTOR_MIN_SPEED, MOTOR_MAX_SPEED);
-    
     // Update current speeds
     if (motor == MOTOR_LEFT) {
         current_speeds.left_speed = speed;
@@ -283,28 +270,8 @@ void Motor_SetSpeed(MotorSelector_t motor, int16_t speed)
         current_speeds.right_speed = speed;
     }
     
-    // Determine direction and PWM value
-    MotorDirection_t direction;
-    uint32_t pwm_value = Motor_SpeedToPWM(speed);
-    
-    if (speed > 0) {
-        direction = MOTOR_FORWARD;
-    } else if (speed < 0) {
-        direction = MOTOR_BACKWARD;
-    } else {
-        direction = MOTOR_STOP;
-        pwm_value = 0;
-    }
-    
-    // Set direction pins
-    Motor_SetDirection(motor, direction);
-    
-    // Set PWM duty cycle
-    if (motor == MOTOR_LEFT) {
-        __HAL_TIM_SET_COMPARE(&htim4, MOTOR_LEFT_PWM_CHANNEL, pwm_value);
-    } else {
-        __HAL_TIM_SET_COMPARE(&htim4, MOTOR_RIGHT_PWM_CHANNEL, pwm_value);
-    }
+    // Set PWM values
+    Motor_SetPWM(motor, speed);
 }
 
 /**
@@ -380,13 +347,11 @@ void Motor_TurnRight(int16_t speed)
   */
 void Motor_Brake(void)
 {
-    // Set PWM to 0 first
-    __HAL_TIM_SET_COMPARE(&htim4, MOTOR_LEFT_PWM_CHANNEL, 0);
-    __HAL_TIM_SET_COMPARE(&htim4, MOTOR_RIGHT_PWM_CHANNEL, 0);
-    
-    // Set direction to brake
-    Motor_SetDirection(MOTOR_LEFT, MOTOR_BRAKE);
-    Motor_SetDirection(MOTOR_RIGHT, MOTOR_BRAKE);
+    // For AT8236, braking is achieved by setting all PWM signals to 1
+    __HAL_TIM_SET_COMPARE(&htim4, TIM_CHANNEL_1, PWM_PERIOD_VALUE);  // PWMB1
+    __HAL_TIM_SET_COMPARE(&htim4, TIM_CHANNEL_2, PWM_PERIOD_VALUE);  // PWMB2
+    __HAL_TIM_SET_COMPARE(&htim4, TIM_CHANNEL_3, PWM_PERIOD_VALUE);  // PWMA1
+    __HAL_TIM_SET_COMPARE(&htim4, TIM_CHANNEL_4, PWM_PERIOD_VALUE);  // PWMA2
     
     // Update current speeds
     current_speeds.left_speed = 0;
@@ -404,15 +369,15 @@ MotorSpeeds_t Motor_GetSpeeds(void)
 }
 
 /**
-  * @brief  Set motor speed with encoder feedback (basic implementation)
+  * @brief  Set motor speed with encoder feedback (placeholder implementation)
   * @param  motor: Motor selector (MOTOR_LEFT or MOTOR_RIGHT)
   * @param  target_rpm: Target speed in RPM
   * @retval None
   */
 void Motor_SetSpeedWithFeedback(MotorSelector_t motor, float target_rpm)
 {
-    // Simple proportional control - can be improved with PID
-    float kp = 1.0f;  // Proportional gain (needs tuning)
+    // Simple proportional control
+    float kp = 1.0f;
     float current_rpm;
     float error;
     int16_t control_output;

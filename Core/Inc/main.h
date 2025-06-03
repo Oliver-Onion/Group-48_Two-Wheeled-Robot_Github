@@ -65,22 +65,18 @@ void Error_Handler(void);
 #define Encoder_A2_GPIO_Port GPIOA
 #define SPI_CS_Pin GPIO_PIN_4
 #define SPI_CS_GPIO_Port GPIOA
-#define BIN2_Pin GPIO_PIN_12
-#define BIN2_GPIO_Port GPIOB
-#define BIN1_Pin GPIO_PIN_13
-#define BIN1_GPIO_Port GPIOB
-#define AIN1_Pin GPIO_PIN_14
-#define AIN1_GPIO_Port GPIOB
-#define AIN2_Pin GPIO_PIN_15
-#define AIN2_GPIO_Port GPIOB
 #define Encoder_B1_Pin GPIO_PIN_6
 #define Encoder_B1_GPIO_Port GPIOC
 #define Encoder_B2_Pin GPIO_PIN_5
 #define Encoder_B2_GPIO_Port GPIOB
-#define PWMA_Pin GPIO_PIN_8
-#define PWMA_GPIO_Port GPIOB
-#define PWMB_Pin GPIO_PIN_9
-#define PWMB_GPIO_Port GPIOB
+#define PWMB1_Pin GPIO_PIN_6
+#define PWMB1_GPIO_Port GPIOB
+#define PWMB2_Pin GPIO_PIN_7
+#define PWMB2_GPIO_Port GPIOB
+#define PWMA1_Pin GPIO_PIN_8
+#define PWMA1_GPIO_Port GPIOB
+#define PWMA2_Pin GPIO_PIN_9
+#define PWMA2_GPIO_Port GPIOB
 
 /* USER CODE BEGIN Private defines */
 

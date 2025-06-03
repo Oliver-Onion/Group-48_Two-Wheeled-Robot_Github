@@ -45,7 +45,7 @@
 /* USER CODE END PM */
 
 /* Private variables ---------------------------------------------------------*/
-I2C_HandleTypeDef hi2c1;
+I2C_HandleTypeDef hi2c2;
 I2C_HandleTypeDef hi2c3;
 
 SPI_HandleTypeDef hspi1;
@@ -76,11 +76,11 @@ static void MX_GPIO_Init(void);
 static void MX_SPI1_Init(void);
 static void MX_TIM1_Init(void);
 static void MX_USART6_UART_Init(void);
-static void MX_I2C1_Init(void);
 static void MX_TIM2_Init(void);
 static void MX_TIM3_Init(void);
 static void MX_TIM4_Init(void);
 static void MX_I2C3_Init(void);
+static void MX_I2C2_Init(void);
 /* USER CODE BEGIN PFP */
 
 /* USER CODE END PFP */
@@ -114,7 +114,7 @@ void HAL_GPIO_EXTI_Callback(uint16_t GPIO_Pin) {
 void HAL_UART_RxCpltCallback(UART_HandleTypeDef *huart)
 {
     if (huart->Instance == USART6) {
-        Motor_BluetoothCommand(bluetooth_rx_data);
+        //Motor_BluetoothCommand(bluetooth_rx_data);
         HAL_UART_Receive_IT(&huart6, &bluetooth_rx_data, 1);
     }
 }
@@ -153,11 +153,11 @@ int main(void)
   MX_SPI1_Init();
   MX_TIM1_Init();
   MX_USART6_UART_Init();
-  MX_I2C1_Init();
   MX_TIM2_Init();
   MX_TIM3_Init();
   MX_TIM4_Init();
   MX_I2C3_Init();
+  MX_I2C2_Init();
   /* USER CODE BEGIN 2 */
   ssd1306_Init(&hi2c3);
   // 清屏
@@ -189,71 +189,70 @@ int main(void)
   /* USER CODE BEGIN WHILE */
   while (1)
   {
-	if(timer_flag)
-	{
-	  MPU6500_UpdateData();
-	  
-	  // Read DMP data for more accurate quaternion calculation
-	  Read_DMP_SPI();
-	  
-	  timer_flag = 0;
-	}
-	uint32_t current_time = HAL_GetTick();
+	char display_str1[20];
+	char buffer[100];
+	sprintf(buffer, "Forward\n");
+	HAL_UART_Transmit(&huart6, (uint8_t*)buffer, strlen(buffer), HAL_MAX_DELAY);
+    // 正转：从慢到快再到慢
+    for (int speed = 40; speed <= 100; speed += 2) {
+      ssd1306_Fill(Black);
+      sprintf(display_str1, "Speed: %d", speed);
+      ssd1306_SetCursor(0, 0);
+      ssd1306_WriteString(display_str1, Font_7x10, White);
+      ssd1306_UpdateScreen(&hi2c3);
 
-	static uint32_t last_update = 0;
-	if (HAL_GetTick() - last_update > 100) {
-	   Encoder_Update();
-	   last_update = HAL_GetTick();
-	}
-
-	if (current_time - last_send_time >= send_interval && send_flag)
-	{
-		send_imu_data();
-		last_send_time = current_time;
-	}
-
-	if (current_time - last_refresh_time >= refresh_interval)
-	{
+      Motor_Forward(speed);
+      HAL_Delay(200);  // 每个速度维持200ms
+    }
+    sprintf(buffer, "Forward Decreasing\n");
+	HAL_UART_Transmit(&huart6, (uint8_t*)buffer, strlen(buffer), HAL_MAX_DELAY);
+    for (int speed = 100; speed >= 40; speed -= 2) {
 		ssd1306_Fill(Black);
-		//ssd1306_UpdateScreen(&hi2c3);
-		char display_str1[20];
-		char display_str2[20];
-		char display_str3[20];
-		char display_str4[20];
-
-		// Check if DMP data is available and use it, otherwise fall back to regular IMU data
-		if (sensors & INV_WXYZ_QUAT) {
-			// Use DMP calculated angles (more accurate)
-			sprintf(display_str1, "DMP Roll: %.1f", Roll_dmp);
-			sprintf(display_str2, "DMP Pitch: %.1f", Pitch_dmp);
-			sprintf(display_str3, "DMP Yaw: %.1f", Yaw_dmp);
-			sprintf(display_str4, "DMP Mode");
-		} else {
-			// Fall back to regular IMU calculation
-			imu_t* imu = MPU6500_GetIMUData();
-			sprintf(display_str1, "Roll: %.1f", imu->rol);
-			sprintf(display_str2, "Pitch: %.1f", imu->pit);
-			sprintf(display_str3, "Yaw: %.1f", imu->yaw);
-			sprintf(display_str4, "IMU Mode");
-		}
-
+		sprintf(display_str1, "Speed: %d", speed);
 		ssd1306_SetCursor(0, 0);
 		ssd1306_WriteString(display_str1, Font_7x10, White);
-
-		ssd1306_SetCursor(0, 12);
-		ssd1306_WriteString(display_str2, Font_7x10, White);
-
-		ssd1306_SetCursor(0, 24);
-		ssd1306_WriteString(display_str3, Font_7x10, White);
-
-		ssd1306_SetCursor(0, 36);
-		ssd1306_WriteString(display_str4, Font_7x10, White);
-
 		ssd1306_UpdateScreen(&hi2c3);
 
-		last_refresh_time = current_time;
-	}
+      Motor_Forward(speed);
+      HAL_Delay(200);
+    }
+    
+    // 停止1秒
+    sprintf(buffer, "Brake\n");
+	HAL_UART_Transmit(&huart6, (uint8_t*)buffer, strlen(buffer), HAL_MAX_DELAY);
+    Motor_Brake();
+    HAL_Delay(2000);
+    
+    // 反转：从慢到快再到慢
+    sprintf(buffer, "Backward\n");
+	HAL_UART_Transmit(&huart6, (uint8_t*)buffer, strlen(buffer), HAL_MAX_DELAY);
+    for (int speed = 40; speed <= 100; speed += 2) {
+    	ssd1306_Fill(Black);
+    	      sprintf(display_str1, "Speed: %d", speed);
+    	      ssd1306_SetCursor(0, 0);
+    	      ssd1306_WriteString(display_str1, Font_7x10, White);
+    	      ssd1306_UpdateScreen(&hi2c3);
 
+      Motor_Backward(speed);
+      HAL_Delay(200);
+    }
+    sprintf(buffer, "Backward Decreasing\n");
+	HAL_UART_Transmit(&huart6, (uint8_t*)buffer, strlen(buffer), HAL_MAX_DELAY);
+    for (int speed = 100; speed >= 40; speed -= 2) {
+    	ssd1306_Fill(Black);
+    	      sprintf(display_str1, "Speed: %d", speed);
+    	      ssd1306_SetCursor(0, 0);
+    	      ssd1306_WriteString(display_str1, Font_7x10, White);
+    	      ssd1306_UpdateScreen(&hi2c3);
+
+      Motor_Backward(speed);
+      HAL_Delay(200);
+    }
+    
+    // 停止1秒
+    Motor_Stop();
+    HAL_Delay(1000);
+    
     /* USER CODE END WHILE */
 
     /* USER CODE BEGIN 3 */
@@ -308,36 +307,36 @@ void SystemClock_Config(void)
 }
 
 /**
-  * @brief I2C1 Initialization Function
+  * @brief I2C2 Initialization Function
   * @param None
   * @retval None
   */
-static void MX_I2C1_Init(void)
+static void MX_I2C2_Init(void)
 {
 
-  /* USER CODE BEGIN I2C1_Init 0 */
+  /* USER CODE BEGIN I2C2_Init 0 */
 
-  /* USER CODE END I2C1_Init 0 */
+  /* USER CODE END I2C2_Init 0 */
 
-  /* USER CODE BEGIN I2C1_Init 1 */
+  /* USER CODE BEGIN I2C2_Init 1 */
 
-  /* USER CODE END I2C1_Init 1 */
-  hi2c1.Instance = I2C1;
-  hi2c1.Init.ClockSpeed = 100000;
-  hi2c1.Init.DutyCycle = I2C_DUTYCYCLE_2;
-  hi2c1.Init.OwnAddress1 = 0;
-  hi2c1.Init.AddressingMode = I2C_ADDRESSINGMODE_7BIT;
-  hi2c1.Init.DualAddressMode = I2C_DUALADDRESS_DISABLE;
-  hi2c1.Init.OwnAddress2 = 0;
-  hi2c1.Init.GeneralCallMode = I2C_GENERALCALL_DISABLE;
-  hi2c1.Init.NoStretchMode = I2C_NOSTRETCH_DISABLE;
-  if (HAL_I2C_Init(&hi2c1) != HAL_OK)
+  /* USER CODE END I2C2_Init 1 */
+  hi2c2.Instance = I2C2;
+  hi2c2.Init.ClockSpeed = 100000;
+  hi2c2.Init.DutyCycle = I2C_DUTYCYCLE_2;
+  hi2c2.Init.OwnAddress1 = 0;
+  hi2c2.Init.AddressingMode = I2C_ADDRESSINGMODE_7BIT;
+  hi2c2.Init.DualAddressMode = I2C_DUALADDRESS_DISABLE;
+  hi2c2.Init.OwnAddress2 = 0;
+  hi2c2.Init.GeneralCallMode = I2C_GENERALCALL_DISABLE;
+  hi2c2.Init.NoStretchMode = I2C_NOSTRETCH_DISABLE;
+  if (HAL_I2C_Init(&hi2c2) != HAL_OK)
   {
     Error_Handler();
   }
-  /* USER CODE BEGIN I2C1_Init 2 */
+  /* USER CODE BEGIN I2C2_Init 2 */
 
-  /* USER CODE END I2C1_Init 2 */
+  /* USER CODE END I2C2_Init 2 */
 
 }
 
@@ -480,7 +479,7 @@ static void MX_TIM2_Init(void)
   htim2.Instance = TIM2;
   htim2.Init.Prescaler = 0;
   htim2.Init.CounterMode = TIM_COUNTERMODE_UP;
-  htim2.Init.Period = 65535;
+  htim2.Init.Period = 8399;
   htim2.Init.ClockDivision = TIM_CLOCKDIVISION_DIV1;
   htim2.Init.AutoReloadPreload = TIM_AUTORELOAD_PRELOAD_DISABLE;
   sConfig.EncoderMode = TIM_ENCODERMODE_TI12;
@@ -529,7 +528,7 @@ static void MX_TIM3_Init(void)
   htim3.Instance = TIM3;
   htim3.Init.Prescaler = 0;
   htim3.Init.CounterMode = TIM_COUNTERMODE_UP;
-  htim3.Init.Period = 65535;
+  htim3.Init.Period = 8399;
   htim3.Init.ClockDivision = TIM_CLOCKDIVISION_DIV1;
   htim3.Init.AutoReloadPreload = TIM_AUTORELOAD_PRELOAD_DISABLE;
   sConfig.EncoderMode = TIM_ENCODERMODE_TI12;
@@ -569,6 +568,7 @@ static void MX_TIM4_Init(void)
 
   /* USER CODE END TIM4_Init 0 */
 
+  TIM_ClockConfigTypeDef sClockSourceConfig = {0};
   TIM_MasterConfigTypeDef sMasterConfig = {0};
   TIM_OC_InitTypeDef sConfigOC = {0};
 
@@ -578,9 +578,18 @@ static void MX_TIM4_Init(void)
   htim4.Instance = TIM4;
   htim4.Init.Prescaler = 0;
   htim4.Init.CounterMode = TIM_COUNTERMODE_UP;
-  htim4.Init.Period = 9999;
+  htim4.Init.Period = 8399;
   htim4.Init.ClockDivision = TIM_CLOCKDIVISION_DIV1;
   htim4.Init.AutoReloadPreload = TIM_AUTORELOAD_PRELOAD_DISABLE;
+  if (HAL_TIM_Base_Init(&htim4) != HAL_OK)
+  {
+    Error_Handler();
+  }
+  sClockSourceConfig.ClockSource = TIM_CLOCKSOURCE_INTERNAL;
+  if (HAL_TIM_ConfigClockSource(&htim4, &sClockSourceConfig) != HAL_OK)
+  {
+    Error_Handler();
+  }
   if (HAL_TIM_PWM_Init(&htim4) != HAL_OK)
   {
     Error_Handler();
@@ -595,6 +604,14 @@ static void MX_TIM4_Init(void)
   sConfigOC.Pulse = 0;
   sConfigOC.OCPolarity = TIM_OCPOLARITY_HIGH;
   sConfigOC.OCFastMode = TIM_OCFAST_DISABLE;
+  if (HAL_TIM_PWM_ConfigChannel(&htim4, &sConfigOC, TIM_CHANNEL_1) != HAL_OK)
+  {
+    Error_Handler();
+  }
+  if (HAL_TIM_PWM_ConfigChannel(&htim4, &sConfigOC, TIM_CHANNEL_2) != HAL_OK)
+  {
+    Error_Handler();
+  }
   if (HAL_TIM_PWM_ConfigChannel(&htim4, &sConfigOC, TIM_CHANNEL_3) != HAL_OK)
   {
     Error_Handler();
@@ -663,9 +680,6 @@ static void MX_GPIO_Init(void)
   HAL_GPIO_WritePin(SPI_CS_GPIO_Port, SPI_CS_Pin, GPIO_PIN_RESET);
 
   /*Configure GPIO pin Output Level */
-  HAL_GPIO_WritePin(GPIOB, BIN2_Pin|BIN1_Pin|AIN1_Pin|AIN2_Pin, GPIO_PIN_RESET);
-
-  /*Configure GPIO pin Output Level */
   HAL_GPIO_WritePin(GPIOC, GPIO_PIN_7, GPIO_PIN_RESET);
 
   /*Configure GPIO pin : SPI_CS_Pin */
@@ -679,13 +693,6 @@ static void MX_GPIO_Init(void)
   GPIO_InitStruct.Pin = GPIO_PIN_1;
   GPIO_InitStruct.Mode = GPIO_MODE_IT_FALLING;
   GPIO_InitStruct.Pull = GPIO_NOPULL;
-  HAL_GPIO_Init(GPIOB, &GPIO_InitStruct);
-
-  /*Configure GPIO pins : BIN2_Pin BIN1_Pin AIN1_Pin AIN2_Pin */
-  GPIO_InitStruct.Pin = BIN2_Pin|BIN1_Pin|AIN1_Pin|AIN2_Pin;
-  GPIO_InitStruct.Mode = GPIO_MODE_OUTPUT_PP;
-  GPIO_InitStruct.Pull = GPIO_NOPULL;
-  GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
   HAL_GPIO_Init(GPIOB, &GPIO_InitStruct);
 
   /*Configure GPIO pin : PC7 */
