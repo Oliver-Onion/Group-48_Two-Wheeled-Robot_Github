@@ -9,7 +9,7 @@
 #define INC_CONTROL_H_
 #include "main.h"
 
-//µç»ú¿ØÖÆÏà¹Øºê¶¨Òå
+//ç”µæœºæ§åˆ¶ç›¸å…³å®å®šä¹‰
 #define AIN1_SET    HAL_GPIO_WritePin(AIN1_GPIO_Port, AIN1_Pin, GPIO_PIN_SET)
 #define AIN1_RESET  HAL_GPIO_WritePin(AIN1_GPIO_Port, AIN1_Pin, GPIO_PIN_RESET)
 #define AIN2_SET    HAL_GPIO_WritePin(AIN2_GPIO_Port, AIN2_Pin, GPIO_PIN_SET)
@@ -21,13 +21,13 @@
 #define PWMA TIM1->CCR1
 #define PWMB TIM1->CCR4
 
-#define PI 3.14159265							//PIÔ²ÖÜÂÊ
-#define Control_Frequency  200.0	//±àÂëÆ÷¶ÁÈ¡ÆµÂÊ
-#define Diameter_67  67.0 				//ÂÖ×ÓÖ±¾¶67mm
-#define EncoderMultiples   4.0 		//±àÂëÆ÷±¶ÆµÊı
-#define Encoder_precision  13.0 	//±àÂëÆ÷¾«¶È 13Ïß
-#define Reduction_Ratio  30.0			//¼õËÙ±È30
-#define Perimeter  210.4867 			//ÖÜ³¤£¬µ¥Î»mm
+#define PI 3.14159265							//PIåœ†å‘¨ç‡
+#define Control_Frequency  200.0	//æ§åˆ¶æ•°æ®è¯»å–é¢‘ç‡
+#define Diameter_67  67.0 				//è½¦è½®ç›´å¾„67mm
+#define EncoderMultiples   4.0 		//ç¼–ç å™¨å€é¢‘æ•°
+#define Encoder_precision  13.0 	//ç¼–ç å™¨ç²¾åº¦ 13çº¿
+#define Reduction_Ratio  30.0			//å‡é€Ÿæ¯”30
+#define Perimeter  210.4867 			//å‘¨é•¿ï¼Œå•ä½mm
 
 #define Middle_angle 0
 #define DIFFERENCE 100

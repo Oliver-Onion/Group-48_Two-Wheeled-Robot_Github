@@ -27,6 +27,7 @@
 #include "ssd1306.h"
 #include "motor_driver.h"
 #include "mpu6500.h"
+#include "pid_balance.h"  // 添加PD控制器头文件
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
@@ -58,16 +59,22 @@ TIM_HandleTypeDef htim4;
 UART_HandleTypeDef huart6;
 
 /* USER CODE BEGIN PV */
-extern void Motor_BluetoothCommand(uint8_t cmd);
-
 volatile uint8_t timer_flag = 0;
 
-uint16_t refresh_interval = 500;  // Screen refresh interval in ms
-uint16_t send_interval = 1000;
+uint16_t refresh_interval = 100;  // Screen refresh interval in ms
+uint16_t send_interval = 500;     // Bluetooth send interval in ms
 
 volatile uint8_t send_flag = 1;  // 1: 发送数据, 0: 停止发送
 
 uint8_t bluetooth_rx_data;
+
+// 电机控制相关变量
+int16_t motor_left_speed;   // 左电机速度百分比 (-100 to 100)
+int16_t motor_right_speed;  // 右电机速度百分比 (-100 to 100)
+
+// 平衡控制相关变量
+volatile uint8_t balance_start = 0;  // 平衡控制启动标志
+float target_angle = 0.0f;          // 目标角度
 /* USER CODE END PV */
 
 /* Private function prototypes -----------------------------------------------*/
@@ -106,15 +113,34 @@ void HAL_GPIO_EXTI_Callback(uint16_t GPIO_Pin) {
 	if (GPIO_Pin == GPIO_PIN_1) { // PB1, the up button
 		MPU6500_InitStructures();
 	}
-	else if (GPIO_Pin == GPIO_PIN_10) { // PA10, 触发电机启动
-		Motor_Forward(50); // 电机以50%的速度向前转动
-	}
 }
 
 void HAL_UART_RxCpltCallback(UART_HandleTypeDef *huart)
 {
     if (huart->Instance == USART6) {
-        //Motor_BluetoothCommand(bluetooth_rx_data);
+        if (bluetooth_rx_data == 'b' && !balance_start) {
+            // 收到'b'字符且当前未启动平衡控制时，记录当前角度作为目标角度并启动平衡
+            target_angle = Pitch_dmp;
+            balance_start = 1;
+            
+            // 发送确认信息
+            char buffer[50];
+            sprintf(buffer, "Balance start, target: %.2f\r\n", target_angle);
+            HAL_UART_Transmit(&huart6, (uint8_t*)buffer, strlen(buffer), HAL_MAX_DELAY);
+        } else if (bluetooth_rx_data == 's') {
+            // 收到's'字符时停止平衡控制
+            balance_start = 0;
+            Motor_Stop();
+            
+            // 发送确认信息
+            char *msg = "Balance stopped\r\n";
+            HAL_UART_Transmit(&huart6, (uint8_t*)msg, strlen(msg), HAL_MAX_DELAY);
+        } else {
+            // 其他字符作为参数调整命令处理
+            PD_Balance_ProcessCommand(bluetooth_rx_data);
+        }
+        
+        // 继续接收下一个字符
         HAL_UART_Receive_IT(&huart6, &bluetooth_rx_data, 1);
     }
 }
@@ -160,22 +186,23 @@ int main(void)
   MX_I2C2_Init();
   /* USER CODE BEGIN 2 */
   ssd1306_Init(&hi2c3);
-  // 清屏
   ssd1306_Fill(Black);
 
   MPU6500_Init();
   MPU6500_InitStructures();
   
   // Initialize DMP for better quaternion calculation
+  HAL_Delay(173);
   DMP_Init_SPI();
+  
+  // 初始化PD控制器
+  PD_Balance_Init();
+  
+  // 初始化电机驱动
+  Motor_Init();
   
   HAL_TIM_Base_Start_IT(&htim1);
   HAL_GPIO_WritePin(GPIOC, GPIO_PIN_7, GPIO_PIN_SET);
-  Motor_Init();
-/*
-  char at_command[] = "AT+NAME=MSDG48\r\n";
-  send_at_command("AT\n");
-  send_at_command(at_command);*/
 
   uint8_t dummy;
   HAL_UART_Receive_IT(&huart6, &dummy, 1);
@@ -189,69 +216,87 @@ int main(void)
   /* USER CODE BEGIN WHILE */
   while (1)
   {
-	char display_str1[20];
-	char buffer[100];
-	sprintf(buffer, "Forward\n");
-	HAL_UART_Transmit(&huart6, (uint8_t*)buffer, strlen(buffer), HAL_MAX_DELAY);
-    // 正转：从慢到快再到慢
-    for (int speed = 40; speed <= 100; speed += 2) {
-      ssd1306_Fill(Black);
-      sprintf(display_str1, "Speed: %d", speed);
-      ssd1306_SetCursor(0, 0);
-      ssd1306_WriteString(display_str1, Font_7x10, White);
-      ssd1306_UpdateScreen(&hi2c3);
+    uint32_t current_time = HAL_GetTick();
+    
+    if(timer_flag)
+    {
+        MPU6500_UpdateData();
+        Read_DMP_SPI();
 
-      Motor_Forward(speed);
-      HAL_Delay(200);  // 每个速度维持200ms
-    }
-    sprintf(buffer, "Forward Decreasing\n");
-	HAL_UART_Transmit(&huart6, (uint8_t*)buffer, strlen(buffer), HAL_MAX_DELAY);
-    for (int speed = 100; speed >= 40; speed -= 2) {
-		ssd1306_Fill(Black);
-		sprintf(display_str1, "Speed: %d", speed);
-		ssd1306_SetCursor(0, 0);
-		ssd1306_WriteString(display_str1, Font_7x10, White);
-		ssd1306_UpdateScreen(&hi2c3);
+        if (balance_start) {
+            // 计算平衡控制速度值 (-100 to 100)
+            int16_t balance_speed = PD_Balance_Calculate(Pitch_dmp - target_angle, gyro[1]);
+            
+            // 直接设置左右电机速度
+            motor_left_speed = balance_speed;
+            motor_right_speed = balance_speed;
+            
+            // 安全检查
+            if (!PD_Balance_IsDangerous(Pitch_dmp - target_angle)) {
+                Motor_SetSpeeds(motor_left_speed, motor_right_speed);
+            } else {
+                Motor_Stop();
+                balance_start = 0;  // 危险角度时停止平衡控制
+            }
+        }
 
-      Motor_Forward(speed);
-      HAL_Delay(200);
+        // 更新编码器数据
+        Encoder_Update();
+
+        timer_flag = 0;
     }
     
-    // 停止1秒
-    sprintf(buffer, "Brake\n");
-	HAL_UART_Transmit(&huart6, (uint8_t*)buffer, strlen(buffer), HAL_MAX_DELAY);
-    Motor_Brake();
-    HAL_Delay(2000);
-    
-    // 反转：从慢到快再到慢
-    sprintf(buffer, "Backward\n");
-	HAL_UART_Transmit(&huart6, (uint8_t*)buffer, strlen(buffer), HAL_MAX_DELAY);
-    for (int speed = 40; speed <= 100; speed += 2) {
-    	ssd1306_Fill(Black);
-    	      sprintf(display_str1, "Speed: %d", speed);
-    	      ssd1306_SetCursor(0, 0);
-    	      ssd1306_WriteString(display_str1, Font_7x10, White);
-    	      ssd1306_UpdateScreen(&hi2c3);
-
-      Motor_Backward(speed);
-      HAL_Delay(200);
+    // 0.1秒刷新一次屏幕显示
+    if (current_time - last_refresh_time >= 100) {
+        char display_str1[20];
+        char display_str2[20];
+        char display_str3[20];
+        char display_str4[20];
+        float kp, kd;
+        
+        // 获取当前PD参数
+        PD_Balance_GetParams(&kp, &kd);
+        
+        // 清屏
+        ssd1306_Fill(Black);
+        
+        // 显示角度和参数
+        sprintf(display_str1, "Pitch: %.2f", Pitch_dmp);
+        sprintf(display_str2, "Speed: %d,%d", motor_left_speed, motor_right_speed);
+        sprintf(display_str3, "Kp: %.0f", kp);
+        sprintf(display_str4, "Kd: %.0f", kd);
+        
+        ssd1306_SetCursor(0, 0);
+        ssd1306_WriteString(display_str1, Font_7x10, White);
+        ssd1306_SetCursor(0, 12);
+        ssd1306_WriteString(display_str2, Font_7x10, White);
+        ssd1306_SetCursor(0, 24);
+        ssd1306_WriteString(display_str3, Font_7x10, White);
+        ssd1306_SetCursor(0, 36);
+        ssd1306_WriteString(display_str4, Font_7x10, White);
+        
+        ssd1306_UpdateScreen(&hi2c3);
+        
+        last_refresh_time = current_time;
     }
-    sprintf(buffer, "Backward Decreasing\n");
-	HAL_UART_Transmit(&huart6, (uint8_t*)buffer, strlen(buffer), HAL_MAX_DELAY);
-    for (int speed = 100; speed >= 40; speed -= 2) {
-    	ssd1306_Fill(Black);
-    	      sprintf(display_str1, "Speed: %d", speed);
-    	      ssd1306_SetCursor(0, 0);
-    	      ssd1306_WriteString(display_str1, Font_7x10, White);
-    	      ssd1306_UpdateScreen(&hi2c3);
-
-      Motor_Backward(speed);
-      HAL_Delay(200);
-    }
     
-    // 停止1秒
-    Motor_Stop();
-    HAL_Delay(1000);
+    // 0.5秒通过蓝牙发送一次数据
+    if (current_time - last_send_time >= 500) {
+        char buffer[100];
+        float kp, kd;
+        PD_Balance_GetParams(&kp, &kd);
+        
+        // 获取编码器数据
+        EncoderData_t encoder_data = Encoder_GetData();
+        
+        sprintf(buffer, "Pitch:%.2f Kp:%.0f Kd:%.0f Speed:%d,%d RPM:%.1f,%.1f\r\n", 
+                Pitch_dmp, kp, kd, 
+                motor_left_speed, motor_right_speed,
+                encoder_data.left_speed_rpm, encoder_data.right_speed_rpm);
+        HAL_UART_Transmit(&huart6, (uint8_t*)buffer, strlen(buffer), HAL_MAX_DELAY);
+        
+        last_send_time = current_time;
+    }
     
     /* USER CODE END WHILE */
 

@@ -61,7 +61,7 @@ void DMP_Init_SPI(void)
     
     // Test connection first
     if (!MPU6500_TestConnection()) {
-        return; // MPU6500 not found
+        //return; // MPU6500 not found
     }
     
     // Reset device
@@ -78,11 +78,26 @@ void DMP_Init_SPI(void)
     // Set accelerometer full scale range to ±2g
     MPU6500_WriteReg(MPU6500_RA_ACCEL_CONFIG, 0x00);
     
+    // Disable all interrupts initially
+    MPU6500_WriteReg(MPU6500_RA_INT_ENABLE, 0x00);
+    HAL_Delay(5);
+    
     // Reset FIFO and DMP
     MPU6500_ReadReg(MPU6500_RA_USER_CTRL, &temp, 1);
     temp |= (BIT_FIFO_RST | BIT_DMP_RST);
     MPU6500_WriteReg(MPU6500_RA_USER_CTRL, temp);
     HAL_Delay(10);
+    
+    // Clear any existing interrupts
+    MPU6500_ReadReg(MPU6500_RA_INT_STATUS, &temp, 1);
+    
+    // Configure USER_CTRL for DMP without enabling interrupts
+    // Enable DMP but disable FIFO for now to prevent overflow
+    MPU6500_WriteReg(MPU6500_RA_USER_CTRL, BIT_DMP_EN);
+    HAL_Delay(10);
+    
+    // Clear interrupt status again after DMP enable
+    MPU6500_ReadReg(MPU6500_RA_INT_STATUS, &temp, 1);
     
     // Note: For complete DMP functionality, you would need to:
     // 1. Load DMP firmware through SPI memory interface
@@ -118,6 +133,30 @@ void Read_DMP_SPI(void)
     // Read FIFO count
     MPU6500_ReadReg(MPU6500_RA_FIFO_COUNTH, fifo_count_reg, 2);
     fifo_count = (fifo_count_reg[0] << 8) | fifo_count_reg[1];
+    
+    // Check for FIFO overflow
+    if (int_status & 0x10) {  // FIFO_OFLOW_INT bit
+        // FIFO overflow - need to reset FIFO
+        uint8_t user_ctrl;
+        MPU6500_ReadReg(MPU6500_RA_USER_CTRL, &user_ctrl, 1);
+        user_ctrl |= BIT_FIFO_RST;  // Set FIFO reset bit
+        MPU6500_WriteReg(MPU6500_RA_USER_CTRL, user_ctrl);
+        HAL_Delay(1);
+        
+        // Clear the overflow bit by reading INT_STATUS again
+        MPU6500_ReadReg(MPU6500_RA_INT_STATUS, &int_status, 1);
+        
+        // Reset DMP variables to fallback mode
+        sensors = 0;
+        return;
+    }
+    
+    // Check if DMP interrupt is set
+    if (int_status != 0x00) {  // DMP_INT bit
+        MPU6500_WriteReg(MPU6500_RA_INT_ENABLE, 0x00);
+        // Clear DMP interrupt by reading INT_STATUS (already done above)
+        // Continue processing DMP data
+    }
     
     // Check if we have a complete DMP packet (28 bytes)
     if (fifo_count >= 28) {
@@ -173,11 +212,27 @@ void Read_DMP_SPI(void)
         q2_dmp = imu_data.q2;
         q3_dmp = imu_data.q3;
         
-        Roll_dmp = imu_data.rol;
-        Pitch_dmp = imu_data.pit;
-        Yaw_dmp = imu_data.yaw;
+        // Use the calculated Euler angles and ensure proper range
+        Roll_dmp = imu_data.rol * 124.13f;
+        Pitch_dmp = imu_data.pit * 124.13f;
+        Yaw_dmp = imu_data.yaw * 124.13f;
+        
+        // Ensure angles are in proper range (-180 to 180 degrees)
+        while (Roll_dmp > 180.0f) Roll_dmp -= 360.0f;
+        while (Roll_dmp < -180.0f) Roll_dmp += 360.0f;
+        while (Pitch_dmp > 180.0f) Pitch_dmp -= 360.0f;
+        while (Pitch_dmp < -180.0f) Pitch_dmp += 360.0f;
+        while (Yaw_dmp > 180.0f) Yaw_dmp -= 360.0f;
+        while (Yaw_dmp < -180.0f) Yaw_dmp += 360.0f;
         
         sensors = 0;
+    }
+    
+    // Additional step: If DMP interrupt is still set, force clear it
+    if (int_status & 0x02) {
+        // Try reading INT_STATUS again to clear persistent interrupt
+        uint8_t temp_status;
+        MPU6500_ReadReg(MPU6500_RA_INT_STATUS, &temp_status, 1);
     }
 }
 
@@ -254,7 +309,7 @@ void MPU6500_OffsetCall(void)
 	mpu_data.ay_offset=mpu_data.ay_offset / 300;
 	mpu_data.az_offset=mpu_data.az_offset / 300;
 	mpu_data.gx_offset=mpu_data.gx_offset / 300;
-	mpu_data.gy_offset=mpu_data.gx_offset / 300;
+	mpu_data.gy_offset=mpu_data.gy_offset / 300;
 	mpu_data.gz_offset=mpu_data.gz_offset / 300;
 }
 
