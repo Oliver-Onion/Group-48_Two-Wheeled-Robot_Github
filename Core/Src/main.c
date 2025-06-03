@@ -28,6 +28,9 @@
 #include "motor_driver.h"
 #include "mpu6500.h"
 #include "pid_balance.h"  // 添加PD控制器头文件
+#include "pid_speed.h"  // 添加PI速度控制器头文件
+#include "pid_turn.h"   // 添加PD转向控制器头文件
+#include "ultrasonic.h"  // 添加超声波模块头文件
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
@@ -75,6 +78,15 @@ int16_t motor_right_speed;  // 右电机速度百分比 (-100 to 100)
 // 平衡控制相关变量
 volatile uint8_t balance_start = 0;  // 平衡控制启动标志
 float target_angle = 0.0f;          // 目标角度
+
+// 障碍检测相关变量
+#define OBSTACLE_THRESHOLD_MM 300    // 障碍检测距离阈值：300mm
+volatile uint8_t obstacle_detected = 0;  // 障碍检测标志
+volatile uint8_t turning_left = 0;       // 左转标志
+float original_target_yaw = 0.0f;        // 原始目标偏航角
+float turn_target_yaw = 0.0f;           // 转向目标偏航角（左转30度后的角度）
+uint32_t turn_start_time = 0;           // 转向开始时间
+uint32_t max_turn_duration = 3000;      // 最大转向持续时间（毫秒）
 /* USER CODE END PV */
 
 /* Private function prototypes -----------------------------------------------*/
@@ -136,13 +148,31 @@ void HAL_UART_RxCpltCallback(UART_HandleTypeDef *huart)
             char *msg = "Balance stopped\r\n";
             HAL_UART_Transmit(&huart6, (uint8_t*)msg, strlen(msg), HAL_MAX_DELAY);
         } else {
-            // 其他字符作为参数调整命令处理
-            PD_Balance_ProcessCommand(bluetooth_rx_data);
+            // 检查是否为速度控制命令 (u,j,i,k,v)
+            if (bluetooth_rx_data == 'u' || bluetooth_rx_data == 'j' || 
+                bluetooth_rx_data == 'i' || bluetooth_rx_data == 'k' ||
+                bluetooth_rx_data == 'v') {
+                PI_Speed_ProcessCommand(bluetooth_rx_data);
+            } else if (bluetooth_rx_data == 'r' || bluetooth_rx_data == 'f' ||
+                       bluetooth_rx_data == 't' || bluetooth_rx_data == 'g' ||
+                       bluetooth_rx_data == 'n') {
+                // 转向控制命令 (r,f,t,g,n)
+                PD_Turn_ProcessCommand(bluetooth_rx_data);
+            } else {
+                // 其他字符作为平衡控制参数调整命令处理
+                PD_Balance_ProcessCommand(bluetooth_rx_data);
+            }
         }
         
         // 继续接收下一个字符
         HAL_UART_Receive_IT(&huart6, &bluetooth_rx_data, 1);
     }
+}
+
+// 超声波输入捕获中断回调函数
+void HAL_TIM_IC_CaptureCallback(TIM_HandleTypeDef *htim) {
+    // 调用超声波模块的回调函数
+    Ultrasonic_TIM_IC_CaptureCallback(htim);
 }
 
 /* USER CODE END 0 */
@@ -198,8 +228,18 @@ int main(void)
   // 初始化PD控制器
   PD_Balance_Init();
   
+  // 初始化PI速度控制器
+  PI_Speed_Init();
+  
+  // 初始化PD转向控制器
+  PD_Turn_Init();
+  
   // 初始化电机驱动
   Motor_Init();
+  
+  // 初始化超声波测距模块
+  Ultrasonic_Init(&htim4);  // 使用TIM4进行超声波测距
+  Ultrasonic_SetSamplingInterval(100);  // 设置采样间隔为100ms
   
   HAL_TIM_Base_Start_IT(&htim1);
   HAL_GPIO_WritePin(GPIOC, GPIO_PIN_7, GPIO_PIN_SET);
@@ -223,13 +263,83 @@ int main(void)
         MPU6500_UpdateData();
         Read_DMP_SPI();
 
-        if (balance_start) {
-            // 计算平衡控制速度值 (-100 to 100)
-            int16_t balance_speed = PD_Balance_Calculate(Pitch_dmp - target_angle, gyro[1]);
+        // 障碍检测逻辑
+        uint32_t distance_mm = Ultrasonic_GetDistanceMM();
+        
+        // 检测到障碍物
+        if (distance_mm < OBSTACLE_THRESHOLD_MM && distance_mm > 10) {  // 排除无效读数
+            if (!obstacle_detected && !turning_left) {
+                // 首次检测到障碍，开始左转
+                obstacle_detected = 1;
+                turning_left = 1;
+                original_target_yaw = PD_Turn_GetTargetAngle();  // 保存原始目标角度
+                turn_target_yaw = original_target_yaw + 30.0f;   // 设置左转30度目标
+                
+                // 处理角度环绕
+                if (turn_target_yaw > 180.0f) {
+                    turn_target_yaw -= 360.0f;
+                }
+                
+                PD_Turn_SetTargetAngle(turn_target_yaw);         // 设置新的目标角度
+                turn_start_time = HAL_GetTick();                 // 记录转向开始时间
+            }
+        } else {
+            obstacle_detected = 0;  // 没有障碍物，清除检测标志
+        }
+        
+        // 转向超时处理
+        if (turning_left && (HAL_GetTick() - turn_start_time > max_turn_duration)) {
+            turning_left = 0;  // 转向超时，停止转向
+            PD_Turn_SetTargetAngle(original_target_yaw);  // 恢复原始目标角度
+        }
+        
+        // 检查转向是否完成（到达目标角度附近）
+        if (turning_left) {
+            float angle_error = turn_target_yaw - Yaw_dmp;
+            // 处理角度跨越±180度的情况
+            if (angle_error > 180.0f) {
+                angle_error -= 360.0f;
+            } else if (angle_error < -180.0f) {
+                angle_error += 360.0f;
+            }
             
-            // 直接设置左右电机速度
-            motor_left_speed = balance_speed;
-            motor_right_speed = balance_speed;
+            // 如果角度误差小于5度，认为转向完成
+            if (fabs(angle_error) < 5.0f) {
+                turning_left = 0;  // 转向完成
+                PD_Turn_SetTargetAngle(turn_target_yaw);  // 保持新的角度作为目标
+            }
+        }
+
+        if (balance_start) {
+            // 更新编码器数据
+            Encoder_Update();
+            
+            // 获取编码器数据，右编码器取反以匹配motor_driver的处理
+            EncoderData_t encoder_data = Encoder_GetData();
+            float left_rpm = encoder_data.left_speed_rpm;
+            float right_rpm = -encoder_data.right_speed_rpm;  // 右编码器读数取反
+            float current_speed = (left_rpm + right_rpm) / 2.0f;
+            
+            // 获取目标速度
+            float target_speed = PI_Speed_GetTargetSpeed();
+            
+            // 计算平衡控制速度值 (-100 to 100)
+            int16_t balance_speed = PD_Balance_Calculate(Pitch_dmp - target_angle, 0);
+            
+            // 计算速度控制修正值
+            int16_t speed_correction = PI_Speed_Calculate(current_speed, target_speed);
+            
+            // 计算转向控制输出
+            float target_angle = PD_Turn_GetTargetAngle();
+            int16_t turn_output = PD_Turn_Calculate(target_angle, Yaw_dmp);
+            
+            // 合成最终电机速度
+            motor_left_speed = balance_speed + speed_correction + turn_output;
+            motor_right_speed = balance_speed + speed_correction - turn_output;
+            
+            // 限制速度范围
+            motor_left_speed = CLAMP(motor_left_speed, -100, 100);
+            motor_right_speed = CLAMP(motor_right_speed, -100, 100);
             
             // 安全检查
             if (!PD_Balance_IsDangerous(Pitch_dmp - target_angle)) {
@@ -239,9 +349,6 @@ int main(void)
                 balance_start = 0;  // 危险角度时停止平衡控制
             }
         }
-
-        // 更新编码器数据
-        Encoder_Update();
 
         timer_flag = 0;
     }
@@ -263,17 +370,17 @@ int main(void)
         // 显示角度和参数
         sprintf(display_str1, "Pitch: %.2f", Pitch_dmp);
         sprintf(display_str2, "Speed: %d,%d", motor_left_speed, motor_right_speed);
-        sprintf(display_str3, "Kp: %.0f", kp);
-        sprintf(display_str4, "Kd: %.0f", kd);
+        //sprintf(display_str3, "Kp: %.0f", kp);
+        //sprintf(display_str4, "Kd: %.0f", kd);
         
         ssd1306_SetCursor(0, 0);
         ssd1306_WriteString(display_str1, Font_7x10, White);
         ssd1306_SetCursor(0, 12);
         ssd1306_WriteString(display_str2, Font_7x10, White);
-        ssd1306_SetCursor(0, 24);
+        /*ssd1306_SetCursor(0, 24);
         ssd1306_WriteString(display_str3, Font_7x10, White);
         ssd1306_SetCursor(0, 36);
-        ssd1306_WriteString(display_str4, Font_7x10, White);
+        ssd1306_WriteString(display_str4, Font_7x10, White);*/
         
         ssd1306_UpdateScreen(&hi2c3);
         
@@ -282,17 +389,27 @@ int main(void)
     
     // 0.5秒通过蓝牙发送一次数据
     if (current_time - last_send_time >= 500) {
-        char buffer[100];
-        float kp, kd;
-        PD_Balance_GetParams(&kp, &kd);
+        char buffer[250];
+        float balance_kp, balance_kd;
+        float speed_kp, speed_ki;
+        float turn_kp, turn_kd;
+        PD_Balance_GetParams(&balance_kp, &balance_kd);
+        PI_Speed_GetParams(&speed_kp, &speed_ki);
+        PD_Turn_GetParams(&turn_kp, &turn_kd);
         
         // 获取编码器数据
         EncoderData_t encoder_data = Encoder_GetData();
+        float target_speed = PI_Speed_GetTargetSpeed();
+        float target_angle = PD_Turn_GetTargetAngle();
         
-        sprintf(buffer, "Pitch:%.2f Kp:%.0f Kd:%.0f Speed:%d,%d RPM:%.1f,%.1f\r\n", 
-                Pitch_dmp, kp, kd, 
+        // 获取距离和障碍检测状态
+        uint32_t distance_mm = Ultrasonic_GetDistanceMM();
+        
+        sprintf(buffer, "Pitch:%.2f BKp:%.0f BKd:%.0f SKp:%.1f SKi:%.2f TKp:%.0f TKd:%.0f Target:%.1f Angle:%.1f Speed:%d,%d RPM:%.1f,%.1f Dist:%ldmm Obs:%d Turn:%d\r\n", 
+                Pitch_dmp, balance_kp, balance_kd, speed_kp, speed_ki, turn_kp, turn_kd, target_speed, target_angle,
                 motor_left_speed, motor_right_speed,
-                encoder_data.left_speed_rpm, encoder_data.right_speed_rpm);
+                encoder_data.left_speed_rpm, -encoder_data.right_speed_rpm,
+                distance_mm, obstacle_detected, turning_left);
         HAL_UART_Transmit(&huart6, (uint8_t*)buffer, strlen(buffer), HAL_MAX_DELAY);
         
         last_send_time = current_time;

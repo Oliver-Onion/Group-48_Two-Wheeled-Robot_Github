@@ -1,0 +1,8 @@
+../Core/Src/ultrasonic.c:38:13:ultrasonic_delay	16	static
+../Core/Src/ultrasonic.c:50:6:Ultrasonic_Init	16	static
+../Core/Src/ultrasonic.c:68:6:Ultrasonic_TriggerMeasurement	8	static
+../Core/Src/ultrasonic.c:87:10:Ultrasonic_GetDistanceMM	16	static
+../Core/Src/ultrasonic.c:104:9:Ultrasonic_IsDataReady	4	static
+../Core/Src/ultrasonic.c:113:6:Ultrasonic_SetSamplingInterval	16	static
+../Core/Src/ultrasonic.c:122:10:Ultrasonic_GetSamplingInterval	4	static
+../Core/Src/ultrasonic.c:132:6:Ultrasonic_TIM_IC_CaptureCallback	32	static

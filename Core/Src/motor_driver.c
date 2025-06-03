@@ -223,7 +223,7 @@ static void Motor_SetPWM(MotorSelector_t motor, int16_t speed)
     
     // Correct direction for right motor if physically reversed
     if (motor == MOTOR_RIGHT) {
-        speed = -speed;  // Uncomment this line if right motor direction is physically reversed
+        speed = -speed;
     }
     
     uint32_t pwm_value = Motor_SpeedToPWMDiff(speed);

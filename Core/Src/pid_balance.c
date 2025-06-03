@@ -7,13 +7,21 @@
 
 /* Includes ------------------------------------------------------------------*/
 #include "pid_balance.h"
-#include "usart.h"
 #include <stdio.h>
 #include <string.h>
 
 /* Private typedef -----------------------------------------------------------*/
 /* Private define ------------------------------------------------------------*/
 #define DANGEROUS_ANGLE  40.0f    // 危险倾角阈值
+
+// 蓝牙命令定义
+#define CMD_KP_UP    'q'  // Kp增加
+#define CMD_KP_DOWN  'a'  // Kp减少
+#define CMD_KD_UP    'w'  // Kd增加
+#define CMD_KD_DOWN  's'  // Kd减少
+#define CMD_PRINT    'p'  // 打印当前参数
+
+extern UART_HandleTypeDef huart6;
 
 /* Private variables ---------------------------------------------------------*/
 static PD_Balance_Params_t pd_params = {
@@ -105,6 +113,68 @@ uint8_t PD_Balance_IsDangerous(float angle)
         return 1;
     }
     return 0;
+}
+
+/**
+  * @brief  调整Kp参数
+  * @param  increase: 1增加，0减少
+  * @retval None
+  */
+void PD_Balance_AdjustKp(uint8_t increase)
+{
+    if (increase) {
+        pd_params.kp += PARAM_ADJUST_STEP;
+    } else {
+        if (pd_params.kp > PARAM_ADJUST_STEP) {  // 防止变为负值
+            pd_params.kp -= PARAM_ADJUST_STEP;
+        }
+    }
+    PD_Balance_PrintParams();
+}
+
+/**
+  * @brief  调整Kd参数
+  * @param  increase: 1增加，0减少
+  * @retval None
+  */
+void PD_Balance_AdjustKd(uint8_t increase)
+{
+    if (increase) {
+        pd_params.kd += PARAM_ADJUST_STEP;
+    } else {
+        if (pd_params.kd > PARAM_ADJUST_STEP) {  // 防止变为负值
+            pd_params.kd -= PARAM_ADJUST_STEP;
+        }
+    }
+    PD_Balance_PrintParams();
+}
+
+/**
+  * @brief  处理蓝牙命令
+  * @param  cmd: 命令字符
+  * @retval None
+  */
+void PD_Balance_ProcessCommand(uint8_t cmd)
+{
+    switch(cmd) {
+        case CMD_KP_UP:
+            PD_Balance_AdjustKp(1);
+            break;
+        case CMD_KP_DOWN:
+            PD_Balance_AdjustKp(0);
+            break;
+        case CMD_KD_UP:
+            PD_Balance_AdjustKd(1);
+            break;
+        case CMD_KD_DOWN:
+            PD_Balance_AdjustKd(0);
+            break;
+        case CMD_PRINT:
+            PD_Balance_PrintParams();
+            break;
+        default:
+            break;
+    }
 }
 
 /**
